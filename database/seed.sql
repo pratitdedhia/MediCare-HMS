@@ -46,7 +46,7 @@ INSERT INTO roles (id, name) VALUES
 -- Bcrypt hash: $2a$10$U.w7eKqj0/qFqLd/tO8h/OGgBqU05p99Lg22aM3uO7eY.hP3l4u3C
 INSERT INTO users (id, full_name, email, password_hash, role_id) VALUES
 (1, 'System Admin', 'admin@medicare.com', '$2a$10$U.w7eKqj0/qFqLd/tO8h/OGgBqU05p99Lg22aM3uO7eY.hP3l4u3C', 1),
-(2, 'Dr. Sarah Jenkins', 'doctor@medicare.com', '$2a$10$U.w7eKqj0/qFqLd/tO8h/OGgBqU05p99Lg22aM3uO7eY.hP3l4u3C', 3),
+(2, 'Sarah Jenkins', 'doctor@medicare.com', '$2a$10$U.w7eKqj0/qFqLd/tO8h/OGgBqU05p99Lg22aM3uO7eY.hP3l4u3C', 3),
 (3, 'Rachel Adams', 'receptionist@medicare.com', '$2a$10$U.w7eKqj0/qFqLd/tO8h/OGgBqU05p99Lg22aM3uO7eY.hP3l4u3C', 2),
 (4, 'Mark Taylor', 'lab@medicare.com', '$2a$10$U.w7eKqj0/qFqLd/tO8h/OGgBqU05p99Lg22aM3uO7eY.hP3l4u3C', 4),
 (5, 'Emily Blunt', 'pharmacist@medicare.com', '$2a$10$U.w7eKqj0/qFqLd/tO8h/OGgBqU05p99Lg22aM3uO7eY.hP3l4u3C', 5),
