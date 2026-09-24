@@ -1,6 +1,0 @@
-- [x] Remove legacy startup files (`start-all.bat`, `start-backend.bat`, `start-frontend.bat`)
-- [x] Remove old `backend/` and `frontend/` directories
-- [x] Implement consolidated single-file `index.html` in the root folder
-- [x] Add the mock database manager and CSV export scripts inside `index.html`
-- [x] Verify styling (simple blue & white, human-coded appearance)
-- [x] Verify functionality of all 7 role dashboards and features
