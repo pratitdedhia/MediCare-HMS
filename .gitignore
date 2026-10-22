@@ -1,0 +1,24 @@
+# Dependencies
+node_modules/
+
+# MySQL data directory
+database/mysql_data/
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
