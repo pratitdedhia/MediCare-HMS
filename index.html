@@ -8250,9 +8250,14 @@
                             <button type="button" class="btn btn-outline-secondary px-3 d-flex align-items-center gap-2" onclick="goToBookingStep(1, ${docId})">
                                 <i data-lucide="arrow-left" size="16"></i> Back
                             </button>
-                            <button type="button" class="btn btn-primary px-4 fw-bold d-flex align-items-center gap-2" onclick="validateStep2AndProceed(${docId})">
-                                Next: Share Records <i data-lucide="arrow-right" size="16"></i>
-                            </button>
+                            <div class="d-flex gap-2">
+                                <button type="button" class="btn btn-outline-primary px-3 fw-semibold" onclick="validateStep2AndProceed(${docId}, 4)">
+                                    Skip to Confirm &rarr;
+                                </button>
+                                <button type="button" class="btn btn-primary px-4 fw-bold d-flex align-items-center gap-2" onclick="validateStep2AndProceed(${docId}, 3)">
+                                    Next: Share Records <i data-lucide="arrow-right" size="16"></i>
+                                </button>
+                            </div>
                         </div>
                     </div>
 
@@ -8372,7 +8377,7 @@
                                 <i data-lucide="arrow-left" size="16"></i> Back to Records
                             </button>
                             <button type="button" class="btn btn-primary px-4 fw-bold d-flex align-items-center gap-2" id="btn-confirm-doctor-booking" onclick="executeDoctorBooking(${docId})">
-                                <i data-lucide="check-circle" size="16"></i> Confirm Booking
+                                <i data-lucide="credit-card" size="16"></i> Confirm & Proceed to Payment
                             </button>
                         </div>
                     </div>
@@ -8417,19 +8422,27 @@
                 }
             }
 
+            if (step === 2) {
+                const dateInput = document.getElementById('booking-date-input');
+                if (dateInput && !dateInput.value) {
+                    dateInput.value = getTodayDateStr();
+                    checkDoctorAvailabilityForDate(docId, dateInput.value);
+                }
+            }
+
             if (step === 4) {
                 updateBookingReviewSummary(docId);
             }
             if (window.lucide) lucide.createIcons();
         }
 
-        function validateStep2AndProceed(docId) {
+        function validateStep2AndProceed(docId, targetStep = 3) {
             const dateVal = document.getElementById('booking-date-input')?.value;
             if (!dateVal) return alert("Please select an appointment date.");
             const todayStr = getTodayDateStr();
             if (dateVal < todayStr) return alert("Past dates cannot be booked. Please select today or a future date.");
             if (!selectedBookingSlot) return alert("Please select an available time slot before continuing.");
-            goToBookingStep(3, docId);
+            goToBookingStep(targetStep, docId);
         }
 
         function toggleBookingRecordSharing(choice) {
@@ -8779,8 +8792,9 @@
                     return;
                 }
 
+                const maxAptId = (db2.appointments || []).reduce((max, a) => a.id > max ? a.id : max, 0);
                 const newApt = {
-                    id: db2.appointments.length + 1,
+                    id: maxAptId + 1,
                     patient_id: freshPatient.id,
                     doctor_id: docId,
                     department_id: freshDoctor.department_id,
@@ -8798,7 +8812,8 @@
                 };
                 db2.appointments.push(newApt);
 
-                const newBillId = db2.bills.length + 1;
+                const maxBillId = (db2.bills || []).reduce((max, b) => b.id > max ? b.id : max, 0);
+                const newBillId = maxBillId + 1;
                 const billItems = [{
                     id: (db2.bill_items ? db2.bill_items.length : 0) + 1,
                     bill_id: newBillId,
@@ -8828,7 +8843,7 @@
                 currentTab = 'dashboard';
             }, false, {
                 doctorName: formatDoctorName(docUser?.full_name),
-                specialization: freshDoctor?.specialization || doctor?.specialization,
+                specialization: doctor?.specialization || 'Specialist Physician',
                 dateTime: `${dateVal} at ${selectedBookingSlot}`,
                 category: 'Doctor OPD Consultation'
             });
@@ -10324,7 +10339,7 @@
                     currentTab = 'dashboard';
                 }, false, {
                     doctorName: formatDoctorName(docUser.full_name),
-                    specialization: freshDoctor?.specialization || doctor?.specialization,
+                    specialization: doctor?.specialization || 'Specialist Physician',
                     dateTime: `${aptData.date} at ${aptData.slot}`,
                     category: 'Doctor OPD Consultation'
                 });
