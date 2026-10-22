@@ -20,7 +20,17 @@ router.get('/appointments', async (req, res) => {
         const doctorId = await getDoctorId(req.user.id);
         const [appointments] = await pool.query(
             `SELECT a.*, u.full_name as patient_name, p.phone as patient_phone, p.blood_group,
-                    (SELECT COUNT(*) FROM appointment_shared_records asr WHERE asr.appointment_id = a.id) as shared_records_count
+                    (CASE 
+                        WHEN a.record_sharing_consent = 1 THEN 
+                            (SELECT COUNT(DISTINCT asr.document_id) 
+                             FROM appointment_shared_records asr 
+                             JOIN patient_documents pd ON asr.document_id = pd.id 
+                             WHERE asr.appointment_id = a.id 
+                               AND asr.patient_id = a.patient_id 
+                               AND asr.doctor_id = a.doctor_id 
+                               AND pd.patient_id = a.patient_id)
+                        ELSE 0 
+                     END) as shared_records_count
              FROM appointments a 
              JOIN patients p ON a.patient_id = p.id 
              JOIN users u ON p.user_id = u.id 
@@ -59,16 +69,29 @@ router.get('/appointments/:id', async (req, res) => {
 
         const appointment = appointments[0];
 
-        // Fetch shared records for this specific appointment
-        const [sharedRecords] = await pool.query(
-            `SELECT asr.id as share_id, asr.category as shared_category, asr.shared_at,
-                    pd.id as document_id, pd.title, pd.category, pd.document_type, pd.source,
-                    pd.doctor_name, pd.facility_name, pd.document_date, pd.file_url, pd.notes
-             FROM appointment_shared_records asr
-             JOIN patient_documents pd ON asr.document_id = pd.id
-             WHERE asr.appointment_id = ?`,
-            [appointmentId]
+        // Fetch shared records for this specific appointment only if consent is active
+        let sharedRecords = [];
+        const hasConsent = Boolean(
+            appointment.record_sharing_consent &&
+            appointment.record_sharing_consent !== 0 &&
+            appointment.record_sharing_consent !== '0'
         );
+
+        if (hasConsent) {
+            const [records] = await pool.query(
+                `SELECT DISTINCT asr.id as share_id, asr.category as shared_category, asr.shared_at,
+                        pd.id as document_id, pd.title, pd.category, pd.document_type, pd.source,
+                        pd.doctor_name, pd.facility_name, pd.document_date, pd.file_url, pd.notes
+                 FROM appointment_shared_records asr
+                 JOIN patient_documents pd ON asr.document_id = pd.id
+                 WHERE asr.appointment_id = ? 
+                   AND asr.patient_id = ? 
+                   AND asr.doctor_id = ? 
+                   AND pd.patient_id = ?`,
+                [appointmentId, appointment.patient_id, doctorId, appointment.patient_id]
+            );
+            sharedRecords = records;
+        }
 
         const sharedReports = sharedRecords.filter(r => r.shared_category === 'Report' || r.category === 'Report');
         const sharedPrescriptions = sharedRecords.filter(r => r.shared_category !== 'Report' && r.category !== 'Report');
@@ -153,7 +176,7 @@ router.get('/appointments/:id/shared-records', async (req, res) => {
 
         // Verify doctor assignment
         const [aptCheck] = await pool.query(
-            'SELECT id, patient_id FROM appointments WHERE id = ? AND doctor_id = ?',
+            'SELECT id, patient_id, record_sharing_consent FROM appointments WHERE id = ? AND doctor_id = ?',
             [appointmentId, doctorId]
         );
 
@@ -161,15 +184,29 @@ router.get('/appointments/:id/shared-records', async (req, res) => {
             return res.status(403).json({ error: 'Access denied. You are not assigned to this appointment.' });
         }
 
-        const [sharedRecords] = await pool.query(
-            `SELECT asr.id as share_id, asr.category as shared_category, asr.shared_at,
-                    pd.id as document_id, pd.title, pd.category, pd.document_type, pd.source,
-                    pd.doctor_name, pd.facility_name, pd.document_date, pd.file_url, pd.notes
-             FROM appointment_shared_records asr
-             JOIN patient_documents pd ON asr.document_id = pd.id
-             WHERE asr.appointment_id = ?`,
-            [appointmentId]
+        const apt = aptCheck[0];
+        let sharedRecords = [];
+        const hasConsent = Boolean(
+            apt.record_sharing_consent &&
+            apt.record_sharing_consent !== 0 &&
+            apt.record_sharing_consent !== '0'
         );
+
+        if (hasConsent) {
+            const [records] = await pool.query(
+                `SELECT DISTINCT asr.id as share_id, asr.category as shared_category, asr.shared_at,
+                        pd.id as document_id, pd.title, pd.category, pd.document_type, pd.source,
+                        pd.doctor_name, pd.facility_name, pd.document_date, pd.file_url, pd.notes
+                 FROM appointment_shared_records asr
+                 JOIN patient_documents pd ON asr.document_id = pd.id
+                 WHERE asr.appointment_id = ? 
+                   AND asr.patient_id = ? 
+                   AND asr.doctor_id = ? 
+                   AND pd.patient_id = ?`,
+                [appointmentId, apt.patient_id, doctorId, apt.patient_id]
+            );
+            sharedRecords = records;
+        }
 
         res.json({
             appointment_id: appointmentId,

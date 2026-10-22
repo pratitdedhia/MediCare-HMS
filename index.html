@@ -1222,8 +1222,10 @@
                         a.shared_prescription_ids = [];
                         changed = true;
                     }
-                    if (a.shared_records_count === undefined) {
-                        a.shared_records_count = (a.shared_report_ids.length + a.shared_prescription_ids.length);
+                    const hasConsent = Boolean(a.record_sharing_consent && a.record_sharing_consent !== '0' && a.record_sharing_consent !== 0 && a.record_sharing_consent !== 'false');
+                    const properCount = hasConsent ? (a.shared_report_ids.length + a.shared_prescription_ids.length) : 0;
+                    if (a.shared_records_count !== properCount) {
+                        a.shared_records_count = properCount;
                         changed = true;
                     }
                 });
@@ -1354,6 +1356,77 @@
                 clean = next;
             }
             return `Dr. ${clean}`;
+        }
+
+        // Appointment-Specific Shared Medical Records Resolver
+        // Resolves authorized patient documents and prescriptions specifically linked to an appointment
+        function getAppointmentSharedRecords(apt, dbInstance) {
+            if (!apt) return { count: 0, reports: [], prescriptions: [], all: [], hasConsent: false };
+            
+            const dbRef = dbInstance || (typeof getDB === 'function' ? getDB() : null) || {};
+            const hasConsent = Boolean(
+                apt.record_sharing_consent && 
+                apt.record_sharing_consent !== '0' && 
+                apt.record_sharing_consent !== 0 &&
+                apt.record_sharing_consent !== 'false'
+            );
+
+            if (!hasConsent) {
+                return { count: 0, reports: [], prescriptions: [], all: [], hasConsent: false };
+            }
+
+            const patientDocs = dbRef.patient_documents || [];
+            const medRecords = dbRef.medical_records || [];
+            const prescriptions = dbRef.prescriptions || [];
+            const doctors = dbRef.doctors || [];
+            const users = dbRef.users || [];
+
+            // Resolve reports strictly owned by this appointment's patient
+            let reports = [];
+            if (Array.isArray(apt.shared_report_ids)) {
+                reports = apt.shared_report_ids.map(id => {
+                    const doc = patientDocs.find(d => (d.id === id || String(d.id) === String(id)) && d.patient_id === apt.patient_id);
+                    return doc ? { ...doc } : null;
+                }).filter(Boolean);
+            }
+
+            // Resolve prescriptions & clinical documents strictly owned by this appointment's patient
+            let prescDocs = [];
+            if (Array.isArray(apt.shared_prescription_ids)) {
+                prescDocs = apt.shared_prescription_ids.map(id => {
+                    const directDoc = patientDocs.find(d => (d.id === id || String(d.id) === String(id)) && d.patient_id === apt.patient_id);
+                    if (directDoc) return { ...directDoc };
+
+                    if (String(id).startsWith('rx-')) {
+                        const rxNum = parseInt(String(id).replace('rx-', ''), 10);
+                        const pRx = prescriptions.find(p => p.id === rxNum);
+                        const pMr = pRx ? medRecords.find(mr => mr.id === pRx.medical_record_id && mr.patient_id === apt.patient_id) : null;
+                        if (!pMr) return null;
+                        const pDoc = doctors.find(d => d.id === pMr.doctor_id);
+                        const pDocUser = pDoc ? users.find(u => u.id === pDoc.user_id) : null;
+                        return {
+                            id: id,
+                            title: `Prescription by ${formatDoctorName(pDocUser?.full_name, 'Physician')}`,
+                            category: 'Prescription',
+                            document_type: 'OPD Consultation Prescription',
+                            document_date: pMr.created_at || 'Previous Visit',
+                            doctor_or_facility: `${formatDoctorName(pDocUser?.full_name, 'Consultant')}`,
+                            facility_name: 'Sunrise Multi-Speciality Hospital',
+                            source: 'Doctor Generated'
+                        };
+                    }
+                    return null;
+                }).filter(Boolean);
+            }
+
+            const total = reports.length + prescDocs.length;
+            return {
+                count: total,
+                reports: reports,
+                prescriptions: prescDocs,
+                all: [...reports, ...prescDocs],
+                hasConsent: true
+            };
         }
 
         // Current Local Date Formatter YYYY-MM-DD
@@ -3289,47 +3362,29 @@
                     const docApts = (db.appointments || []).filter(a => !currentDoctor || a.doctor_id === currentDoctor.id);
                     const scheduledApts = docApts.filter(a => a.status === 'Scheduled' || a.status === 'Arrived');
                     
+                    if (window.doctorActiveConsultAptId && !docApts.some(a => a.id === window.doctorActiveConsultAptId)) {
+                        window.doctorActiveConsultAptId = scheduledApts[0]?.id || null;
+                    }
                     if (!window.doctorActiveConsultAptId && scheduledApts.length > 0) {
                         window.doctorActiveConsultAptId = scheduledApts[0].id;
                     }
                     
-                    const activeApt = (db.appointments || []).find(a => a.id === window.doctorActiveConsultAptId) || scheduledApts[0] || null;
+                    const activeApt = scheduledApts.find(a => a.id === window.doctorActiveConsultAptId) || docApts.find(a => a.id === window.doctorActiveConsultAptId) || scheduledApts[0] || null;
+                    if (activeApt) {
+                        window.doctorActiveConsultAptId = activeApt.id;
+                    }
+
                     let activePatient = null;
                     let activePatientUser = null;
-                    let sharedReportDocs = [];
-                    let sharedPrescDocs = [];
-                    let sharedCount = 0;
+
+                    const sharedData = getAppointmentSharedRecords(activeApt, db);
+                    const sharedReportDocs = sharedData.reports;
+                    const sharedPrescDocs = sharedData.prescriptions;
+                    const sharedCount = sharedData.count;
 
                     if (activeApt) {
                         activePatient = (db.patients || []).find(p => p.id === activeApt.patient_id);
                         activePatientUser = (db.users || []).find(u => u.id === activePatient?.user_id);
-                        sharedCount = activeApt.shared_records_count || ((activeApt.shared_report_ids?.length || 0) + (activeApt.shared_prescription_ids?.length || 0));
-                        
-                        if (activeApt.record_sharing_consent && activeApt.shared_report_ids) {
-                            sharedReportDocs = activeApt.shared_report_ids.map(id => (db.patient_documents || []).find(d => d.id === id)).filter(Boolean);
-                        }
-                        if (activeApt.record_sharing_consent && activeApt.shared_prescription_ids) {
-                            sharedPrescDocs = activeApt.shared_prescription_ids.map(id => {
-                                const directDoc = (db.patient_documents || []).find(d => d.id === id || String(d.id) === String(id));
-                                if (directDoc) return directDoc;
-                                if (String(id).startsWith('rx-')) {
-                                    const rxNum = parseInt(String(id).replace('rx-', ''));
-                                    const pRx = (db.prescriptions || []).find(p => p.id === rxNum);
-                                    const pMr = pRx ? (db.medical_records || []).find(mr => mr.id === pRx.medical_record_id) : null;
-                                    const pDoc = pMr ? (db.doctors || []).find(d => d.id === pMr.doctor_id) : null;
-                                    const pDocUser = pDoc ? (db.users || []).find(u => u.id === pDoc.user_id) : null;
-                                    return {
-                                        id: id,
-                                        title: `Prescription by ${formatDoctorName(pDocUser?.full_name, 'Physician')}`,
-                                        document_type: 'OPD Consultation Prescription',
-                                        document_date: pMr?.created_at || 'Previous Visit',
-                                        doctor_or_facility: `${formatDoctorName(pDocUser?.full_name, 'Consultant')}`,
-                                        source: 'Doctor Generated'
-                                    };
-                                }
-                                return null;
-                            }).filter(Boolean);
-                        }
                     }
 
                     container.innerHTML = `
@@ -3354,8 +3409,8 @@
                                         ${scheduledApts.map(apt => {
                                             const pUser = db.users.find(u => u.id === (db.patients.find(p => p.id === apt.patient_id)?.user_id));
                                             const isSel = activeApt && activeApt.id === apt.id ? 'selected' : '';
-                                            const sCount = apt.shared_records_count || ((apt.shared_report_ids?.length || 0) + (apt.shared_prescription_ids?.length || 0));
-                                            const badgeTxt = sCount > 0 ? ` [${sCount} Shared Rec]` : '';
+                                            const aptShared = getAppointmentSharedRecords(apt, db);
+                                            const badgeTxt = aptShared.count > 0 ? ` [${aptShared.count} Shared Rec]` : '';
                                             return `<option value="${apt.id}" ${isSel}>Apt #${apt.id} - ${pUser?.full_name || 'Patient'} (${apt.appointment_time}) Token #${apt.token_number}${badgeTxt}</option>`;
                                         }).join('')}
                                         ${scheduledApts.length === 0 ? `<option value="">No scheduled appointments available</option>` : ''}
@@ -3403,7 +3458,7 @@
                                 </div>
                             </div>
 
-                            ${(!activeApt || activeApt.record_sharing_consent !== 1 || sharedCount === 0) ? `
+                            ${(!activeApt || !sharedData.hasConsent || sharedCount === 0) ? `
                                 <div class="p-3 bg-light border rounded text-center text-muted small">
                                     <i data-lucide="file-x" size="20" class="mb-1 d-block mx-auto text-muted"></i>
                                     The patient has not shared any medical records for this appointment.
@@ -3425,9 +3480,9 @@
                                                         <div class="shared-record-item d-flex justify-content-between align-items-center">
                                                             <div>
                                                                 <div class="fw-bold small text-dark">${doc.title}</div>
-                                                                <div class="text-muted" style="font-size:0.75rem;">${doc.document_type} | ${doc.document_date}</div>
+                                                                <div class="text-muted" style="font-size:0.75rem;">${doc.document_type || 'Report'} | ${doc.document_date || ''}</div>
                                                             </div>
-                                                            <button class="btn btn-xs btn-outline-primary py-1 px-2" type="button" onclick="previewMedicalDocument(${doc.id})">
+                                                            <button class="btn btn-xs btn-outline-primary py-1 px-2" type="button" onclick="previewMedicalDocument('${doc.id}')">
                                                                 <i data-lucide="eye" size="12"></i> Preview
                                                             </button>
                                                         </div>
@@ -3452,7 +3507,7 @@
                                                         <div class="shared-record-item d-flex justify-content-between align-items-center">
                                                             <div>
                                                                 <div class="fw-bold small text-dark">${doc.title}</div>
-                                                                <div class="text-muted" style="font-size:0.75rem;">${doc.document_type} | ${doc.document_date}</div>
+                                                                <div class="text-muted" style="font-size:0.75rem;">${doc.document_type || 'Prescription'} | ${doc.document_date || ''}</div>
                                                             </div>
                                                             <button class="btn btn-xs btn-outline-success py-1 px-2" type="button" onclick="previewMedicalDocument('${doc.id}')">
                                                                 <i data-lucide="eye" size="12"></i> Preview
@@ -3675,7 +3730,8 @@
                                         ` : filteredApts.map(apt => {
                                             const patientObj = (db.patients || []).find(p => p.id === apt.patient_id);
                                             const patientUser = (db.users || []).find(u => u.id === patientObj?.user_id);
-                                            const sharedCount = apt.shared_records_count || ((apt.shared_report_ids?.length || 0) + (apt.shared_prescription_ids?.length || 0));
+                                            const aptShared = getAppointmentSharedRecords(apt, db);
+                                            const sharedCount = aptShared.count;
 
                                             return `
                                                 <tr class="doctor-apt-row" data-search="${(patientUser?.full_name || '').toLowerCase()} ${apt.id} ${(apt.reason || '').toLowerCase()}">
@@ -8874,38 +8930,10 @@
             const medRec = (db.medical_records || []).find(mr => mr.appointment_id === apt.id);
             const allPatientPrescs = (db.medical_records || []).filter(mr => mr.patient_id === apt.patient_id);
 
-            const sharedCount = apt.shared_records_count || ((apt.shared_report_ids?.length || 0) + (apt.shared_prescription_ids?.length || 0));
-
-            // Resolve Shared Reports
-            let sharedReports = [];
-            if (apt.record_sharing_consent && apt.shared_report_ids) {
-                sharedReports = apt.shared_report_ids.map(id => (db.patient_documents || []).find(d => d.id === id)).filter(Boolean);
-            }
-
-            // Resolve Shared Prescriptions & Documents
-            let sharedPrescs = [];
-            if (apt.record_sharing_consent && apt.shared_prescription_ids) {
-                sharedPrescs = apt.shared_prescription_ids.map(id => {
-                    const directDoc = (db.patient_documents || []).find(d => d.id === id || String(d.id) === String(id));
-                    if (directDoc) return directDoc;
-                    if (String(id).startsWith('rx-')) {
-                        const rxNum = parseInt(String(id).replace('rx-', ''));
-                        const pRx = (db.prescriptions || []).find(p => p.id === rxNum);
-                        const pMr = pRx ? (db.medical_records || []).find(mr => mr.id === pRx.medical_record_id) : null;
-                        const pDoc = pMr ? (db.doctors || []).find(d => d.id === pMr.doctor_id) : null;
-                        const pDocUser = pDoc ? (db.users || []).find(u => u.id === pDoc.user_id) : null;
-                        return {
-                            id: id,
-                            title: `Prescription by ${formatDoctorName(pDocUser?.full_name, 'Physician')}`,
-                            document_type: 'OPD Consultation Prescription',
-                            document_date: pMr?.created_at || 'Previous Visit',
-                            doctor_or_facility: `${formatDoctorName(pDocUser?.full_name, 'Consultant')}`,
-                            source: 'Doctor Generated'
-                        };
-                    }
-                    return null;
-                }).filter(Boolean);
-            }
+            const sharedData = getAppointmentSharedRecords(apt, db);
+            const sharedReports = sharedData.reports;
+            const sharedPrescs = sharedData.prescriptions;
+            const sharedCount = sharedData.count;
 
             // Check lab requests for this consultation
             const labReqs = (db.lab_requests || []).filter(lr => lr.appointment_id === apt.id);
@@ -8965,10 +8993,10 @@
                         </div>
                     </div>
 
-                    ${(!apt.record_sharing_consent || sharedCount === 0) ? `
+                    ${(!apt || !sharedData.hasConsent || sharedCount === 0) ? `
                         <div class="p-3 bg-light border rounded text-center text-muted small">
                             <i data-lucide="file-x" size="20" class="mb-1 d-block mx-auto text-muted"></i>
-                            You have not shared medical records for this appointment.
+                            The patient has not shared any medical records for this appointment.
                         </div>
                     ` : `
                         <div class="row g-3">
